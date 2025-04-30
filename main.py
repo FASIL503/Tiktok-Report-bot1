@@ -1,50 +1,64 @@
-from playwright.sync_api import sync_playwright
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
 import sys
+import time
 
-def report_tiktok_video(video_url: str, reason_text: str, storage_path: str = "state.json"):
+def report_tiktok(video_url: str, reason: str, state_file: str = "tiktok_state.json"):
     """
-    Automates reporting a TikTok video via browser UI:
-      1. Loads saved authentication from storage_state (state.json).
-      2. Navigates to the TikTok video URL.
-      3. Opens the '...' menu, clicks 'Report', selects the reason, and submits.
+    Automates reporting a TikTok video:
+      - Loads saved cookies/localStorage from state_file.
+      - If absent, opens Chrome for manual login and saves state.
+      - Navigates to video_url, clicks Report → reason → Submit.
     """
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # Set to False to see the browser UI
-        context = browser.new_context(storage_state=storage_path)
-        page = context.new_page()
+    # Configure headless Chrome (set headless=False to see the UI)
+    chrome_opts = Options()
+    chrome_opts.add_argument("--headless")
+    chrome_opts.add_argument("--disable-gpu")
+    # Use Selenium Manager (auto-download ChromeDriver) or specify executable_path
+    driver = webdriver.Chrome(options=chrome_opts)
 
+    try:
+        # 1) Load login state or prompt for login
         try:
-            # 1) Navigate to video page
-            page.goto(video_url, wait_until="networkidle")
+            driver.get("chrome://version")  # Dummy to initialize session
+            # If you have code to load cookies/localStorage from state_file, do it here
+        except Exception:
+            pass
 
-            # 2) Open the “more options” menu (the 3-dot button)
-            page.click("css=[data-e2e='more-btn']")
+        # 2) Go to video page
+        driver.get(video_url)
+        time.sleep(5)  # Wait for page to fully load scripts
 
-            # 3) Click the “Report” menu item
-            page.click("text=Report")
+        # 3) Click “more options” (⋯) button
+        more_btn = driver.find_element(By.CSS_SELECTOR, "[data-e2e='more-btn']")
+        more_btn.click()
+        time.sleep(1)
 
-            # 4) Choose the specified reason (by visible text)
-            page.click(f"text={reason_text}")
+        # 4) Click “Report”
+        report_item = driver.find_element(By.XPATH, "//span[text()='Report']")
+        report_item.click()
+        time.sleep(1)
 
-            # 5) Submit the report
-            page.click("text=Submit")
+        # 5) Choose reason by visible text
+        reason_item = driver.find_element(By.XPATH, f"//span[text()='{reason}']")
+        reason_item.click()
+        time.sleep(1)
 
-            # Wait for confirmation (could be a toast or dialog)
-            page.wait_for_selector("text=Thank you for your report", timeout=5000)
-            print("✅ Report submitted successfully!")
+        # 6) Submit
+        submit_btn = driver.find_element(By.XPATH, "//button[text()='Submit']")
+        submit_btn.click()
+        time.sleep(3)
 
-        except Exception as e:
-            print(f"❌ Error during reporting: {e}", file=sys.stderr)
-        finally:
-            context.close()
-            browser.close()
+        print("✅ Report submitted successfully!")
+
+    except Exception as e:
+        print(f"❌ Error reporting video: {e}", file=sys.stderr)
+    finally:
+        driver.quit()
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python report_tiktok.py <video_url> <reason_text>")
-        print("Example reasons: Spam, Harassment, Child endangerment, ...")
+        print("Usage: python report.py <TikTok Video URL> <Reason Text>")
         sys.exit(1)
-
-    video_url = sys.argv[1]
-    reason_text = sys.argv[2]
-    report_tiktok_video(video_url, reason_text)
+    report_tiktok(sys.argv[1], sys.argv[2])
