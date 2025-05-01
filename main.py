@@ -1,64 +1,120 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-import sys
-import time
+import discord
+from discord.ext import commands
+import asyncio
+import logging
 
-def report_tiktok(video_url: str, reason: str, state_file: str = "tiktok_state.json"):
-    """
-    Automates reporting a TikTok video:
-      - Loads saved cookies/localStorage from state_file.
-      - If absent, opens Chrome for manual login and saves state.
-      - Navigates to video_url, clicks Report → reason → Submit.
-    """
-    # Configure headless Chrome (set headless=False to see the UI)
-    chrome_opts = Options()
-    chrome_opts.add_argument("--headless")
-    chrome_opts.add_argument("--disable-gpu")
-    # Use Selenium Manager (auto-download ChromeDriver) or specify executable_path
-    driver = webdriver.Chrome(options=chrome_opts)
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+
+# Bot setup
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='.', intents=intents)
+
+# Nuke configuration
+delete_concurrency = 5  # Number of concurrent delete operations
+
+async def bulk_delete_channels(guild: discord.Guild):
+    sem = asyncio.Semaphore(delete_concurrency)
+    tasks = []
+    for channel in guild.channels:
+        async def _del(ch):
+            async with sem:
+                try:
+                    await ch.delete()
+                except Exception as e:
+                    logging.error(f"Channel delete failed: {e}")
+        tasks.append(asyncio.create_task(_del(channel)))
+    await asyncio.gather(*tasks)
+
+async def bulk_delete_roles(guild: discord.Guild):
+    sem = asyncio.Semaphore(delete_concurrency)
+    tasks = []
+    for role in guild.roles:
+        async def _del(r):
+            async with sem:
+                try:
+                    await r.delete()
+                except Exception as e:
+                    logging.error(f"Role delete failed: {e}")
+        tasks.append(asyncio.create_task(_del(role)))
+    await asyncio.gather(*tasks)
+
+async def bulk_ban_members(guild: discord.Guild):
+    sem = asyncio.Semaphore(delete_concurrency)
+    tasks = []
+    for member in guild.members:
+        if member.bot or member == guild.me:
+            continue
+        async def _ban(m):
+            async with sem:
+                try:
+                    await guild.ban(m)
+                except Exception as e:
+                    logging.error(f"Ban failed: {e}")
+        tasks.append(asyncio.create_task(_ban(member)))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, Exception))
+
+async def create_roles(guild: discord.Guild, name: str, count: int = 50):
+    sem = asyncio.Semaphore(delete_concurrency)
+    tasks = []
+    for _ in range(count):
+        async def _create():
+            async with sem:
+                try:
+                    await guild.create_role(name=name)
+                except Exception as e:
+                    logging.error(f"Role create failed: {e}")
+        tasks.append(asyncio.create_task(_create()))
+    await asyncio.gather(*tasks)
+
+async def create_voice_channels(guild: discord.Guild, name: str, count: int = 20):
+    sem = asyncio.Semaphore(delete_concurrency)
+    tasks = []
+    for _ in range(count):
+        async def _create():
+            async with sem:
+                try:
+                    await guild.create_voice_channel(name=name)
+                except Exception as e:
+                    logging.error(f"Voice channel create failed: {e}")
+        tasks.append(asyncio.create_task(_create()))
+    await asyncio.gather(*tasks)
+
+async def nuke_guild(guild: discord.Guild, name: str):
+    logging.info(f"Nuking guild: {guild.name} ({guild.id})")
+    banned_count = await bulk_ban_members(guild)
+    logging.info(f"Members banned: {banned_count}")
+    await bulk_delete_channels(guild)
+    logging.info("Channels deleted")
+    await bulk_delete_roles(guild)
+    logging.info("Roles deleted")
+    await create_voice_channels(guild, name)
+    logging.info("Voice channels created")
+    await create_roles(guild, name)
+    logging.info("Roles created")
+
+@bot.command(name='nuke', help='Nuke the entire server')
+@commands.has_permissions(administrator=True)
+async def nuke(ctx: commands.Context):
+    await ctx.message.delete()
+    confirm = await ctx.send('Are you sure you want to nuke this server? Reply with `yes` within 15 seconds.')
+
+    def check(m):
+        return m.author == ctx.author and m.content.lower() == 'yes' and m.channel == ctx.channel
 
     try:
-        # 1) Load login state or prompt for login
-        try:
-            driver.get("chrome://version")  # Dummy to initialize session
-            # If you have code to load cookies/localStorage from state_file, do it here
-        except Exception:
-            pass
+        await bot.wait_for('message', timeout=15.0, check=check)
+    except asyncio.TimeoutError:
+        return await ctx.send('Nuke canceled.')
 
-        # 2) Go to video page
-        driver.get(video_url)
-        time.sleep(5)  # Wait for page to fully load scripts
+    await nuke_guild(ctx.guild, name=ctx.guild.name)
+    await ctx.send('Server nuked.')
 
-        # 3) Click “more options” (⋯) button
-        more_btn = driver.find_element(By.CSS_SELECTOR, "[data-e2e='more-btn']")
-        more_btn.click()
-        time.sleep(1)
+@bot.event
+async def on_ready():
+    logging.info(f"Logged in as {bot.user} | Connected to {len(bot.guilds)} guilds")
 
-        # 4) Click “Report”
-        report_item = driver.find_element(By.XPATH, "//span[text()='Report']")
-        report_item.click()
-        time.sleep(1)
-
-        # 5) Choose reason by visible text
-        reason_item = driver.find_element(By.XPATH, f"//span[text()='{reason}']")
-        reason_item.click()
-        time.sleep(1)
-
-        # 6) Submit
-        submit_btn = driver.find_element(By.XPATH, "//button[text()='Submit']")
-        submit_btn.click()
-        time.sleep(3)
-
-        print("✅ Report submitted successfully!")
-
-    except Exception as e:
-        print(f"❌ Error reporting video: {e}", file=sys.stderr)
-    finally:
-        driver.quit()
-
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python report.py <TikTok Video URL> <Reason Text>")
-        sys.exit(1)
-    report_tiktok(sys.argv[1], sys.argv[2])
+if __name__ == '__main__':
+    token = input('Enter bot token: ')
+    bot.run(token)
